@@ -14,6 +14,7 @@ Consiglio di usare l'opzione -O2 in fase di compilazione, per rendere più veloc
 
 ## Partite infinite
 ... in corso ...
+
 Nella cartella `infinite` si trovano le partite infinite che ho trovato, come output del programma testone.
 
 2017/02/17: trovata la prima partita infinita della storia di cavacamisa.
