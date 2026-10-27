@@ -20,12 +20,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "cvc_engine.h"
+#include "cvc_flat.h"  // CVC_NPAT, CVC_HIST_*, cvc_unrank
 
-#define CVC_NPAT 34650
 #define CVC_NMASKS 5586853480ULL
-#define CVC_HIST_STEPS 4096    // histogram bins per batch; larger go to records
-#define CVC_HIST_CAPS 1024
 #define CVC_MAX_STEPS 1000000  // host-side histogram range (records fill it)
 
 static uint64_t cvc_binom[41][13];
@@ -37,19 +36,9 @@ static void cvc_init_binom(void) {
 }
 
 // Mask with 12 bits set whose colex rank is r (requires cvc_init_binom).
-static uint64_t cvc_unrank_mask(uint64_t r) {
-  uint64_t m = 0;
-  int c = 39;
-  for (int k = 12; k >= 1; k--) {
-    while (cvc_binom[c][k] > r) c--;
-    m |= 1ULL << c;
-    r -= cvc_binom[c][k];
-    c--;
-  }
-  return m;
-}
+static inline uint64_t cvc_unrank_mask(uint64_t r) { return cvc_unrank((const uint64_t(*)[13])cvc_binom, r); }
 
-static uint64_t cvc_next_mask(uint64_t m) {  // Gosper's hack
+static inline uint64_t cvc_next_mask(uint64_t m) {  // Gosper's hack
   uint64_t c = m & -m, r = m + c;
   return (((r ^ m) >> 2) / c) | r;
 }
@@ -133,6 +122,15 @@ static void cvc_save(const char *dir, const cvc_totals *t) {
   cvc_write_file_atomic(dir, "steps_hist.csv", cvc_fill_steps, t);
   cvc_write_file_atomic(dir, "captures_hist.csv", cvc_fill_caps, t);
   cvc_write_file_atomic(dir, "summary.txt", cvc_fill_summary, t);  // last: marks the checkpoint
+}
+
+// mkdir -p
+static void cvc_mkdirs(const char *dir) {
+  char p[1024];
+  snprintf(p, sizeof p, "%s", dir);
+  for (char *c = p + 1; *c; c++)
+    if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; }
+  mkdir(p, 0755);
 }
 
 // ---- One batch of results (filled by the worker threads).
@@ -232,7 +230,7 @@ static int cvc_load(const char *dir, cvc_totals *t) {
     snprintf(path, sizeof path, "%s/%s", dir, names[h]);
     f = fopen(path, "r");
     if (!f) { fprintf(stderr, "missing %s\n", path); exit(1); }
-    fgets(line, sizeof line, f);
+    if (!fgets(line, sizeof line, f)) { fprintf(stderr, "empty %s\n", path); exit(1); }
     int i;
     unsigned long long c;
     while (fscanf(f, "%d,%llu", &i, &c) == 2) arrs[h][i] = c;

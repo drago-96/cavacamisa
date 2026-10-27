@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
   if (threads < 1 || threads > 256) { fprintf(stderr, "bad --threads\n"); return 1; }
   cvc_init_binom();
   if (cvc_make_patterns(patterns) != CVC_NPAT) { fprintf(stderr, "pattern bug\n"); return 1; }
-  mkdir(out, 0755);
+  cvc_mkdirs(out);
 
   char path[1024];
   snprintf(path, sizeof path, "%s/records.txt", out);

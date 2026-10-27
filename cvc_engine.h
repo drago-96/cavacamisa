@@ -26,11 +26,14 @@
 #include <stdint.h>
 
 #ifdef __CUDACC__
-#define CVC_FN __host__ __device__ __forceinline__
-#define CVC_CTZ64(x) (__ffsll((long long)(x)) - 1)
-#define CVC_POP64(x) __popcll(x)
+#define CVC_FN static __host__ __device__ __forceinline__
 #else
 #define CVC_FN static inline
+#endif
+#ifdef __CUDA_ARCH__  // device side of a CUDA compile
+#define CVC_CTZ64(x) (__ffsll((long long)(x)) - 1)
+#define CVC_POP64(x) __popcll((unsigned long long)(x))
+#else
 #define CVC_CTZ64(x) __builtin_ctzll(x)
 #define CVC_POP64(x) __builtin_popcountll(x)
 #endif

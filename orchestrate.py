@@ -4,19 +4,23 @@
   ./orchestrate.py plan   --dir runs/full --shards 4096        # whole deal space
   ./orchestrate.py plan   --dir runs/sample --sample 20        # 20 random blocks of 160 masks (unbiased stats)
   ./orchestrate.py run    --dir runs/full [--threads 10] [--hours 8]
+  ./orchestrate.py run    --dir runs/full --exe ./cvc_gpu --gpus 0,1,2,3   # one worker per GPU
   ./orchestrate.py status --dir runs/full
   ./orchestrate.py merge  --dir runs/full                      # totals + infinite deals by cycle
 
 The space is the 5,586,853,480 court-card masks (x 34,650 value patterns each).
-A shard is a range of masks run by ./cvc_enum in its own folder, so shards can
-be run in any order, on different machines, and interrupted at any time.
+A shard is a range of masks run by ./cvc_enum (CPU) or ./cvc_gpu (GPU) in its
+own folder, so shards can be run in any order, on different machines, and
+interrupted at any time.
 """
 import argparse
 import json
 import os
 import random
+import queue
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 
@@ -69,30 +73,48 @@ def cmd_plan(a):
 
 def cmd_run(a):
     plan = load_plan(a.dir)
-    exe = os.path.join(HERE, "cvc_enum")
+    exe = os.path.abspath(a.exe) if a.exe else os.path.join(HERE, "cvc_enum")
     if not os.path.exists(exe):
-        subprocess.run(["make", "-C", HERE, "cvc_enum"], check=True)
+        subprocess.run(["make", "-C", HERE, os.path.basename(exe)], check=True)
     deadline = time.time() + a.hours * 3600 if a.hours else None
+    todo = queue.Queue()
     for i, sh in enumerate(plan["shards"]):
-        if deadline and time.time() > deadline:
-            print("time budget used up; run again to continue")
-            break
-        s, done, complete = shard_state(a.dir, i, sh)
-        if complete:
-            continue
-        cmd = [exe, f"--out={shard_dir(a.dir, i)}", f"--threads={a.threads}"]
-        if s is not None:
-            cmd.append("--resume")
-        else:
-            cmd += [f"--start={sh['start']}", f"--count={sh['count']}", f"--rule={plan['rule']}"]
-            if plan["stop_lower"]:
-                cmd.append("--stop-lower")
-        if sh["count"] < 4096:
-            cmd.append(f"--batch={max(1, sh['count'])}")
-        print(f"shard {i}/{len(plan['shards'])}", flush=True)
-        r = subprocess.run(cmd)
-        if r.returncode != 0:
-            sys.exit(f"cvc_enum failed on shard {i}")
+        if not shard_state(a.dir, i, sh)[2]:
+            todo.put(i)
+    failed = []
+
+    def worker(device):
+        while not failed:
+            if deadline and time.time() > deadline:
+                return
+            try:
+                i = todo.get_nowait()
+            except queue.Empty:
+                return
+            sh = plan["shards"][i]
+            cmd = [exe, f"--out={shard_dir(a.dir, i)}", f"--threads={a.threads}"]
+            if device is not None:
+                cmd.append(f"--device={device}")
+            if shard_state(a.dir, i, sh)[0] is not None:
+                cmd.append("--resume")
+            else:
+                cmd += [f"--start={sh['start']}", f"--count={sh['count']}", f"--rule={plan['rule']}"]
+                if plan["stop_lower"]:
+                    cmd.append("--stop-lower")
+            where = f" on GPU {device}" if device is not None else ""
+            print(f"shard {i}/{len(plan['shards'])}{where}", flush=True)
+            if subprocess.run(cmd).returncode != 0:
+                failed.append(i)
+
+    workers = [threading.Thread(target=worker, args=(d,)) for d in (a.gpus.split(",") if a.gpus else [None])]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+    if failed:
+        sys.exit(f"{os.path.basename(exe)} failed on shard(s) {failed}")
+    if not todo.empty():
+        print("time budget used up; run again to continue")
 
 
 def cmd_status(a):
@@ -181,6 +203,8 @@ def main():
     p.add_argument("--dir", required=True)
     p.add_argument("--threads", type=int, default=os.cpu_count())
     p.add_argument("--hours", type=float)
+    p.add_argument("--exe", help="enumerator binary (default ./cvc_enum; ./cvc_gpu for NVIDIA GPUs)")
+    p.add_argument("--gpus", help="comma separated CUDA devices, one worker each (e.g. 0,1,2,3)")
     for name in ("status", "merge"):
         sub.add_parser(name).add_argument("--dir", required=True)
     a = ap.parse_args()

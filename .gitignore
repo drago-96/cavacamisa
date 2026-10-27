@@ -1,8 +1,15 @@
 # build outputs
 cvc_enum
 cvc_check
+cvc_gpu
+cvc_gpu_cpu
 .test_*.txt
 __pycache__/
 
 # enumeration runs (orchestrate.py)
 runs/
+gpu_check_runs/
+gpu_check_report.txt
+
+# ssh keys for rented servers
+deploy/

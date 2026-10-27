@@ -1,5 +1,8 @@
 CC ?= clang
 CFLAGS ?= -O3 -march=native -Wall -Wextra
+NVCC ?= nvcc
+# GPU architecture for nvcc, e.g. ARCH=sm_90 (H100), sm_80 (A100), sm_89 (L4, 4090)
+ARCH ?= native
 
 all: cvc_enum cvc_check
 
@@ -8,6 +11,14 @@ cvc_enum: cvc_enum.c cvc_engine.h cvc_enum_common.h
 
 cvc_check: cvc_check.c cvc_engine.h
 	$(CC) $(CFLAGS) -o $@ cvc_check.c
+
+# GPU enumerator (needs the CUDA toolkit)
+cvc_gpu: cvc_gpu.cu cvc_flat.h cvc_engine.h cvc_enum_common.h
+	$(NVCC) -O3 -arch=$(ARCH) -o $@ cvc_gpu.cu
+
+# Same program with the kernel emulated on CPU threads, to check it anywhere
+cvc_gpu_cpu: cvc_gpu.cu cvc_flat.h cvc_engine.h cvc_enum_common.h
+	$(CXX) -O3 -march=native -Wall -Wextra -x c++ -o $@ cvc_gpu.cu -lpthread
 
 # Cross-check the fast engine against reference.py on random deals.
 test: cvc_check
@@ -18,6 +29,6 @@ test: cvc_check
 	rm -f .test_deals.txt .test_ref.txt .test_fast.txt
 
 clean:
-	rm -f cvc_enum cvc_check
+	rm -f cvc_enum cvc_check cvc_gpu cvc_gpu_cpu
 
 .PHONY: all test clean

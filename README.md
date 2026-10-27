@@ -57,6 +57,8 @@ Other cycles may exist. Ruling them out requires the exhaustive search
 | `cvc_engine.h` | Fast game engine: header-only C, also compiles as CUDA. |
 | `cvc_check.c` | Runs deals through the engine (to compare with `reference.py`) and benchmarks it. |
 | `cvc_enum.c`, `cvc_enum_common.h` | Exhaustive enumerator on CPU threads, with checkpoints and `--resume`. |
+| `cvc_gpu.cu`, `cvc_flat.h` | The same enumerator on an NVIDIA GPU (same arguments, same output files). |
+| `gpu_check.sh` | On a GPU server: checks `cvc_gpu` against `cvc_enum`, then benchmarks it. |
 | `orchestrate.py` | Splits the deal space into shards, runs them, merges the results. |
 | `cycles.py` | Cycle of an infinite deal, and every deal that leads into it. |
 | `infinite/` | Infinite games found so far. |
@@ -81,6 +83,35 @@ make test       # engine vs reference.py on 20000 random deals
 ./orchestrate.py status --dir runs/full
 ./orchestrate.py merge --dir runs/full                # totals, histograms, infinite.txt
 ```
+
+## Running on a GPU server
+
+You need the CUDA toolkit (`nvcc`), `make`, a C compiler and `python3`.
+
+```sh
+make cvc_enum cvc_gpu             # ARCH=sm_90 for H100, sm_80 A100, sm_89 L4/4090 (default: native)
+./gpu_check.sh                    # validate, then benchmark; output also in gpu_check_report.txt
+./orchestrate.py plan --dir runs/full
+./orchestrate.py run --dir runs/full --exe ./cvc_gpu --gpus 0,1,2,3   # one worker per GPU
+```
+
+`gpu_check.sh validate` runs `cvc_enum` (CPU) and `cvc_gpu` on the same slices:
+both rules, `--stop-lower`, both ends of the deal space, and the mask of the
+2017 infinite deal. The output files must be byte-identical. `gpu_check.sh bench`
+times 4 slices of 2.3·10⁹ games each, and also the 2025 random sampler if its
+source is present (`OLD_CUDA=path/to/cavacamisa_cuda.cu`). Compare games/s
+together with the average steps per game, since that is the work per game.
+
+How the GPU version works: thread *t* of a launch plays mask *t*/30, one
+thirtieth of its value patterns. It uses a flat event loop (`cvc_flat.h`): one
+iteration plays one court card, and a thread starts its next deal as soon as a
+game ends, so a warp never waits for its longest game. Histograms live in
+shared memory and are flushed once per block. The rare games over the step
+limit come back as records and are re-played exactly on the host.
+`make cvc_gpu_cpu` builds the same program with the kernel run on CPU threads,
+so the GPU code path can be checked without a GPU (`./gpu_check.sh validate ./cvc_gpu_cpu`).
+
+## Output files
 
 Each run folder contains `summary.txt` (counts per outcome), `steps_hist.csv`
 and `captures_hist.csv` (exact), and `records.txt`. `records.txt` lists every
@@ -111,7 +142,8 @@ infinite deal and every finite game with at least 4096 steps or 1024 captures.
 All of this is cross-checked: the engine matches `reference.py` exactly
 (winner, steps, captures) on 250,006 deals under both rules. The enumerator
 matches an independent Python enumeration, and its results don't change with
-batch size.
+batch size. On an RTX 5090, `cvc_gpu` gives byte-identical output files to
+`cvc_enum` on all 12 checks of `gpu_check.sh validate`.
 
 ## Benchmarks
 
@@ -119,6 +151,14 @@ batch size.
 |---|---|---|
 | `cvc_engine.h`, 1 core of an M1 Max | 1.9·10⁶ | — |
 | `cvc_enum`, 10 threads, M1 Max | 2.0·10⁷ (2.7·10⁷ with `--stop-lower`) | ~113 days (~83) |
+| 2025 random sampler (`cavacamisa_cuda.cu`), RTX 5090 | 1.0·10⁸ | ~22 days |
+| `cvc_gpu`, RTX 5090 | 2.3·10⁹ (3.1·10⁹ with `--stop-lower`) | ~23 h (~17 h) |
+
+The GPU numbers come from 32 random blocks of 16,384 masks: 1.8·10¹⁰ games,
+averaging 186 steps per game against 189 for random deals.
+
+The rates are end-to-end (wall clock over all games). They include generating
+the deals, which costs ~0.3 ns per deal against ~360 ns to play it.
 
 ## Known issues in older code
 
